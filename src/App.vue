@@ -896,7 +896,7 @@ const handleSynthCommand = async (command, source) => {
     }
 
     const [_, type, paramsStr, duration, dest] = match;
-    const params = paramsStr
+    const params = (paramsStr || "")
       .split(",")
       .map((p) => p.trim())
       .filter(Boolean)
