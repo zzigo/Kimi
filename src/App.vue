@@ -1,10 +1,18 @@
 <template>
   <div class="app">
     <div class="top-bar" v-show="showUI">
-      <button class="play-button" @click="togglePlay">
-        <img v-if="!isPlaying" src="/play.svg" alt="Play" />
-        <img v-else src="/stop.svg" alt="Stop" />
-      </button>
+      <div class="controls">
+        <button class="play-button" @click="togglePlay">
+          <img v-if="!isPlaying" src="/play.svg" alt="Play" />
+          <img v-else src="/stop.svg" alt="Stop" />
+        </button>
+        <canvas
+          ref="waveformCanvas"
+          class="waveform"
+          width="100"
+          height="20"
+        ></canvas>
+      </div>
       <div class="top-bar-spacer"></div>
       <div class="username-container">
         <input
@@ -79,10 +87,8 @@ const synthTypes = {
       frequency: rate,
     }),
     trigger: async (synth, config, duration) => {
-      // Start audio context if needed
-      await Tone.start();
-
       // Set volume
+      console.log("Setting synth volume:", config.volume);
       synth.volume.value = config.volume;
 
       // Create a repeating trigger
@@ -142,13 +148,15 @@ const synthTypes = {
 
 const users = ref([]);
 const time = ref("00:00:00");
-const username = ref("");
 const isPlaying = ref(false);
 const code = ref("");
 const isEditingUsername = ref(false);
 const showUI = ref(true);
 const myIP = ref("connecting...");
 const showHelp = ref(false);
+
+const userId = ref(uuidv4());
+const username = ref(String.fromCharCode(65 + Math.floor(Math.random() * 26)));
 
 const serverIP =
   window.location.hostname === "localhost"
@@ -212,7 +220,6 @@ const saveUsername = () => {
 
 const editor = ref(null);
 const usernameInput = ref(null);
-const userId = ref(uuidv4());
 const userColor = ref(`hsl(${Math.random() * 360}, 100%, 50%)`);
 let aceEditor = null;
 const commandHistory = ref([]);
@@ -221,6 +228,10 @@ let currentCommand = ref("");
 
 ws.onmessage = async (event) => {
   const data = JSON.parse(event.data);
+  if (data.type !== "time") {
+    console.log("Received message from server:", data); // General message feedback
+  }
+
   if (data.type === "users") {
     users.value = data.users.filter((u) => u.name.trim() !== "");
     const currentUser = users.value.find((u) => u.id === userId.value);
@@ -231,9 +242,6 @@ ws.onmessage = async (event) => {
       }
     }
   }
-  if (data.type === "time") {
-    time.value = data.time;
-  }
   if (data.type === "start") {
     isPlaying.value = true;
   }
@@ -241,7 +249,29 @@ ws.onmessage = async (event) => {
     isPlaying.value = false;
   }
   if (data.type === "synth") {
+    console.log("[SYNTH RX]", {
+      type: data.type,
+      command: data.command,
+      source: data.source,
+      timestamp: new Date().toISOString(),
+    });
     handleSynthCommand(data.command, data.source);
+  }
+  if (data.type === "message") {
+    console.log("Message from node:", data, { data });
+    if (data.destination === username.value) {
+      console.log(
+        `[MSG TO ${username.value}] From ${data.source}:`,
+        data.content
+      );
+    } else if (data.destination === "broadcast") {
+      console.log(`[BROADCAST] From ${data.source}:`, data.content);
+    } else {
+      console.log(
+        `[MSG TO ${data.destination}] From ${data.source}:`,
+        data.content
+      );
+    }
   }
 };
 
@@ -249,22 +279,46 @@ ws.onmessage = async (event) => {
 const handleSynthCommand = async (command, source) => {
   try {
     const match = command.match(
-      /^(\w+)\(([\d,.\s]*)\)(?:\.(\d+)s)?(?:\.(\w+))?$/
+      /^(\w+)\(([\d.,\s]*)\)(?:\.([\d.]+)s)?(?:\.([\w]+))?$/
     );
-    if (!match) return;
+    if (!match) {
+      console.warn("Synth command format invalid:", command);
+      return;
+    }
 
     const [_, type, paramsStr, duration, dest] = match;
     const params = paramsStr.split(",").map(Number);
     const targetUser = dest || "local";
     const durationSecs = duration ? parseFloat(duration) : null;
 
+    console.log("Synth command parsed:", {
+      type,
+      parameters: params,
+      duration: durationSecs ? `${durationSecs}s` : "continuous",
+      destination: dest || "local",
+      valid: type in synthTypes,
+    });
+
     // Only process if command is for us or broadcast
-    if (targetUser !== "local" && targetUser !== username.value) return;
+    if (targetUser !== "local" && targetUser !== username.value) {
+      console.log(
+        `Message not for us, but for ${targetUser}, my username is ${username.value}. Ignoring.`
+      );
+      return;
+    }
 
     if (type in synthTypes) {
+      console.log("Synth type found:", type, { type, synthTypes }); // Verbose feedback: synth type found
       // Create synth instance
       const synth = synthTypes[type].create();
       const config = synthTypes[type].params(...params);
+
+      console.log("Synth initialized:", {
+        type,
+        config,
+        nodeType: synth.constructor.name,
+        context: Tone.context.state,
+      });
 
       // Generate unique key for this synth
       const synthKey = `${source || userId.value}_${Date.now()}`;
@@ -293,6 +347,7 @@ const handleSynthCommand = async (command, source) => {
         );
         if (loop) activeLoops.set(synthKey, loop);
       } else {
+        console.log("Default synth behavior:", type, config);
         // Default behavior for other synths
         Object.entries(config).forEach(([key, value]) => {
           if (key === "volume") {
@@ -340,6 +395,63 @@ const sendMessage = (message) => {
   }
 };
 
+// Waveform visualization
+const waveformCanvas = ref(null);
+let animationFrame = null;
+let analyser = null;
+
+const setupWaveform = () => {
+  if (!waveformCanvas.value) return;
+
+  const audioContext = Tone.getContext().rawContext;
+  analyser = audioContext.createAnalyser();
+  analyser.fftSize = 256;
+  Tone.getDestination().connect(analyser);
+
+  const canvas = waveformCanvas.value;
+  const ctx = canvas.getContext("2d");
+  const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+  const drawWaveform = () => {
+    if (!isPlaying.value) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.strokeStyle = "#333";
+      ctx.stroke();
+      return;
+    }
+
+    animationFrame = requestAnimationFrame(drawWaveform);
+    analyser.getByteTimeDomainData(dataArray);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    ctx.strokeStyle = "#4CAF50";
+
+    const sliceWidth = canvas.width / analyser.frequencyBinCount;
+    let x = 0;
+
+    for (let i = 0; i < analyser.frequencyBinCount; i++) {
+      const v = dataArray[i] / 128.0;
+      const y = (v * canvas.height) / 2;
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+
+      x += sliceWidth;
+    }
+
+    ctx.stroke();
+  };
+
+  drawWaveform();
+};
+
 const handleKeyDown = (e) => {
   if (e.ctrlKey) {
     if (e.key === "p") {
@@ -357,6 +469,29 @@ const handleKeyDown = (e) => {
 };
 
 onMounted(async () => {
+  setupWaveform();
+  // Get audio context and ensure it's running
+  const audioContext = Tone.getContext().rawContext;
+
+  // Try to resume the context - needed for browsers that require user interaction
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+
+  // Wait for the context to be running
+  if (audioContext.state !== "running") {
+    await new Promise((resolve) => {
+      const checkState = () => {
+        if (audioContext.state === "running") {
+          resolve(true);
+        } else {
+          requestAnimationFrame(checkState);
+        }
+      };
+      checkState();
+    });
+  }
+
   const editorElement = editor.value;
   aceEditor = ace.edit(editorElement);
   aceEditor.on("change", () => {
@@ -386,6 +521,21 @@ Evaluate with Ctrl+Enter`
     wrap: true,
     tabSize: 2,
     useWorker: false,
+    enableBasicAutocompletion: false,
+    enableLiveAutocompletion: false,
+    enableSnippets: false,
+    showLineNumbers: false,
+    highlightActiveLine: false,
+    displayIndentGuides: false,
+    behavioursEnabled: false,
+    animatedScroll: false,
+    showFoldWidgets: false,
+    fadeFoldWidgets: false,
+    maxLines: Infinity,
+    minLines: 2,
+    scrollPastEnd: 0,
+    fixedWidthGutter: false,
+    readOnly: false,
   });
 
   // Remove default keybindings
@@ -428,9 +578,39 @@ Evaluate with Ctrl+Enter`
   aceEditor.commands.addCommand({
     name: "evaluateCode",
     bindKey: { win: "Ctrl-Enter", mac: "Ctrl-Enter" },
-    exec: () => {
+    exec: async () => {
+      // Get audio context and ensure it's running
+      const audioContext = Tone.getContext().rawContext;
+
+      // Try to resume the context - needed for browsers that require user interaction
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      // Wait for the context to be running
+      if (audioContext.state !== "running") {
+        await new Promise((resolve) => {
+          const checkState = () => {
+            if (audioContext.state === "running") {
+              resolve(true);
+            } else {
+              requestAnimationFrame(checkState);
+            }
+          };
+          checkState();
+        });
+      }
+
+      // Ensure Tone.js is started on first user interaction
+      if (Tone.context.state !== "running") {
+        console.log("Starting Tone.js context...");
+        await Tone.start();
+        console.log("Tone.js context started:", Tone.context.state);
+      }
+
       const selectedText = aceEditor.getSelectedText();
       const codeToEvaluate = selectedText || aceEditor.getValue();
+      console.log("Evaluating code:", codeToEvaluate);
       addToHistory(codeToEvaluate);
       sendSynthCommand(codeToEvaluate);
     },
@@ -469,6 +649,9 @@ Evaluate with Ctrl+Enter`
 });
 
 onUnmounted(() => {
+  if (animationFrame) {
+    cancelAnimationFrame(animationFrame);
+  }
   if (aceEditor) {
     aceEditor.destroy();
   }
@@ -514,6 +697,20 @@ const addToHistory = (content) => {
   background-color: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(5px);
   z-index: 1000;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.waveform {
+  height: 20px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
 }
 
 .play-button,
