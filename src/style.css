@@ -1,0 +1,120 @@
+html,
+body {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans",
+    "Helvetica Neue", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: black; /* Changed to black */
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.app {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background-color: transparent;
+}
+
+.top-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* Changed to space-between */
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background-color: transparent;
+  backdrop-filter: blur(5px);
+  z-index: 1000;
+}
+
+.top-bar-spacer {
+  flex-grow: 1; /* Add spacer to push time and play button to the right */
+}
+
+.play-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.play-button svg {
+  width: 24px;
+  height: 24px;
+  color: white;
+}
+
+.username {
+  font-size: 0.9rem;
+}
+
+.user-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.time {
+  font-family: monospace;
+  font-size: 1rem;
+}
+
+.editor {
+  flex: 1;
+  width: 100%;
+  height: 100vh;
+  background-color: transparent !important;
+  padding-top: 4rem; /* Increased padding to 4rem */
+}
+
+.ace-editor {
+  background-color: transparent !important;
+}
+
+.ace_gutter {
+  background-color: transparent !important;
+}
+
+.ace_content {
+  background-color: transparent !important;
+}
+
+.ace_scroller {
+  background-color: transparent !important;
+}
+
+.ace_cursor {
+  color: var(--text-color) !important;
+}
+
+.user-list {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background-color: transparent;
+  padding: 0.8rem;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+}
+
+.user-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
